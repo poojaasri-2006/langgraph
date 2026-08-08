@@ -1,4 +1,3 @@
-%%writefile workflow.py
 import sys, io, os, traceback
 from typing import TypedDict, List, Optional
 from langchain_core.messages import BaseMessage, HumanMessage
