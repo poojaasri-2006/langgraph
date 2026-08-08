@@ -1,16 +1,21 @@
 import sys, io, os, traceback
 from typing import TypedDict, List, Optional
+import uvicorn
+from fastapi import FastAPI
+from langserve import add_routes
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.tools import tool
 from langgraph.graph import StateGraph, START, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 
+# --- LLM ---
 llm_flash = ChatGoogleGenerativeAI(
     model="gemini-3.1-flash-lite-preview",  # verify this model id is valid for your key
     google_api_key=os.environ.get("GOOGLE_APIKEY"),
     temperature=0,
 )
 
+# --- State ---
 class CrewState(TypedDict):
     messages: List[BaseMessage]
     next_step: Optional[str]
@@ -25,6 +30,7 @@ def extract_text(content) -> str:
         return str(content[0]) if content else ""
     return str(content)
 
+# --- Tools ---
 @tool
 def run_python_code(code: str) -> str:
     """Execute python code and return stdout or the error trace."""
@@ -49,9 +55,7 @@ def generate_test_cases(task_description: str) -> str:
     response = llm_flash.invoke(prompt)
     return extract_text(response.content)
 
-# task_input_node is GONE - the task now comes directly from the API payload's
-# "messages" field, so the graph starts at "developer" instead.
-
+# --- Graph nodes ---
 def developer_node(state: CrewState):
     task = state["messages"][-1].content
     response = llm_flash.invoke(
@@ -71,9 +75,9 @@ def tester_node(state: CrewState):
     return {"report": report}
 
 def manager_node(state: CrewState):
-    # No human in the loop for the API - always finalize after one pass.
     return {"next_step": "exit", "report": state["report"]}
 
+# --- Graph construction ---
 workflow = StateGraph(CrewState)
 workflow.add_node("developer", developer_node)
 workflow.add_node("tester", tester_node)
@@ -85,3 +89,12 @@ workflow.add_edge("tester", "manager")
 workflow.add_edge("manager", END)
 
 rt_app = workflow.compile()
+
+# --- FastAPI app ---
+app = FastAPI(title="LangGraph Crew Workflow API")
+
+add_routes(app, rt_app, path="/crew", playground_type="default")
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
